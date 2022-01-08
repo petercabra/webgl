@@ -4,32 +4,46 @@
 // miestnosti (levely). Pri implementácii použite zákony fyziky.
 
 import {GUI} from './datGUI/dat.gui.module.js'
-
-let physicsWorld, scene, camera, renderer, rigidBodies = [], tmpTrans = null
+//AmmoJS variables
+let physicsWorld, rigidBodies = [], tmpTrans = null
 let ammoTmpPos = null, ammoTmpQuat = null;
-
-let ballObject = null, moveDirection = {left: 0, right: 0, forward: 0, back: 0}
-let box = null,
-    blockPlane = null,
-    cube = [null,null,null],
-    curve = [null,null],
-    kMoveDirection = {left: 0, right: 0, forward: 0, back: 0}, tmpPos = new THREE.Vector3(),
-    tmpQuat = new THREE.Quaternion();
-
-
-let mouseCoords = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+let kMoveDirection = {left: 0, right: 0, forward: 0, back: 0}, tmpPos = new THREE.Vector3();
+let tmpQuat = new THREE.Quaternion();
 const STATE = {DISABLE_DEACTIVATION: 4}
 const FLAGS = { CF_KINEMATIC_OBJECT: 2 }
-let clock;
+
+//Default camera position
+let startRoomIndex = 0;
+
+//Threejs variables
 let controls;
 let container = [];
-let PosIndex = [300,0];
+let scene, camera, renderer, clock;
+
+//Ball shooting variables
+let mouseCoords = new THREE.Vector2(), raycaster = new THREE.Raycaster();
+let ballObject = null, moveDirection = {left: 0, right: 0, forward: 0, back: 0}
+
+//Room 1 Variables (index = 0)
+let PosIndex1 = [300,0];
+let room1MovingBox = [null,null,null];
+let curve = [null,null];
+let room1Filled = false;
+
+//Room 2 Variables (index = 1)
+let box = null;
+let room2Filled = false;
 
 //Room 3 Variables (index = 2)
-let room3Box = [null,null,null,null];
+let room3MovingBox = [null,null,null,null];
+let blockPlane = [];
+let PosIndex3 = [-95,-57,-19,18];
+let movementDir = [1,1,1,1];
+let staticObject = [null,null,null,null,null,null,null,null,null,null];
+let room3Filled;
 
 //GUI variables
-let level = null;
+let level = 'Room 1';
 var guiControls = new function() {
     this.throwingForce = 400;
     this.movementSpeed = 1;
@@ -38,7 +52,11 @@ var guiControls = new function() {
     this.toggle = true;
     this.size = 10;
     this.boxMass = 2;
+    this.resetGame = function (){
+        location.reload();
+    }
 }
+
 
 //Room parameters
 var room = new function() {
@@ -51,6 +69,7 @@ var room = new function() {
 //Ammojs Initialization
 Ammo().then(start)
 
+//This function initializes game world
 function start() {
 
     tmpTrans = new Ammo.btTransform();
@@ -65,14 +84,13 @@ function start() {
     createRoomFloor(-3);
     createRoomWalls();
     fillRoom1();
-    fillRoom2();
-    fillRoom3();
     setupEventHandlers();
     renderFrame();
     setupGui()
 
 }
 
+//Function for setting ammo.js physics parameters such as solver, gravity and more.
 function setupPhysicsWorld() {
 
     let collisionConfiguration = new Ammo.btDefaultCollisionConfiguration(),
@@ -84,7 +102,7 @@ function setupPhysicsWorld() {
     physicsWorld.setGravity(new Ammo.btVector3(0, -380, 0));
 
 }
-
+//Setup for renderer, camera, lighting, and controls.
 function setupGraphics() {
 
     //create clock for timing
@@ -97,8 +115,8 @@ function setupGraphics() {
     scene.add( light );
     //create camera
     camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.2, 5000);
-    camera.position.set(room.roomOffsetX[2], 30, 70);
-    camera.lookAt(new THREE.Vector3(room.roomOffsetX[2], 300, 0));
+    camera.position.set(room.roomOffsetX[startRoomIndex], 100, 380);
+    camera.lookAt(new THREE.Vector3(room.roomOffsetX[startRoomIndex], 300, 0));
 
     for(let i = 0; i < 3; i++){
         const pointLight = new THREE.PointLight( 0xffffff, 1, 10000 );
@@ -133,15 +151,25 @@ function setupGraphics() {
     renderer.gammaOutput = true;
 
     renderer.shadowMap.enabled = true;
-    controls.target = new THREE.Vector3(room.roomOffsetX[2], 0, 0)
+    controls.target = new THREE.Vector3(room.roomOffsetX[startRoomIndex], 0, 0)
 }
 
+//Besides rendering frame, this function also updates position of moving objects.
 function renderFrame() {
 
     let deltaTime = clock.getDelta();
-    moveCube(0);
-    moveCube(1);
-    rotateWall(2);
+
+    moveRoom1Cube(0);
+    moveRoom1Cube(1);
+    rotateRoom1Wall(2);
+
+    if(room3Filled){
+        moveRoom3Cube(0);
+        moveRoom3Cube(1);
+        moveRoom3Cube(2);
+        moveRoom3Cube(3);
+    }
+
 
     updateScene(deltaTime);
 
@@ -151,14 +179,15 @@ function renderFrame() {
 
 }
 
+//Setup for keyboard and mouse event listeners.
 function setupEventHandlers() {
 
     window.addEventListener('keydown', handleKeyDown, false);
-    window.addEventListener('keyup', handleKeyUp, false);
     window.addEventListener('mousemove', handleMouseMove, false);
 
 }
 
+//Stores mouse coordinates for shooting ball.
 function handleMouseMove(event) {
     mouseCoords.set(
         (event.clientX / window.innerWidth) * 2 - 1,
@@ -166,66 +195,22 @@ function handleMouseMove(event) {
     );
 }
 
+//shootBall() is called when space is pressed.
 function handleKeyDown(event) {
 
     let keyCode = event.keyCode;
 
     switch (keyCode) {
-
-        case 87: //W: FORWARD
-            moveDirection.forward = 1
-            break;
-
-        case 83: //S: BACK
-            moveDirection.back = 1
-            break;
-
-        case 65: //A: LEFT
-            moveDirection.left = 1
-            break;
-
-        case 68: //D: RIGHT
-            moveDirection.right = 1
-            break;
-
-        case 32:
+        case 32: //SPACE: SHOOT BALL
             shootBall();
             break;
     }
 }
 
-function handleKeyUp(event) {
-    let keyCode = event.keyCode;
-
-    switch (keyCode) {
-        case 87: //FORWARD
-            moveDirection.forward = 0
-            break;
-
-        case 83: //BACK
-            moveDirection.back = 0
-            break;
-
-        case 65: //LEFT
-            moveDirection.left = 0
-            break;
-
-        case 68: //RIGHT
-            moveDirection.right = 0
-            break;
-
-        case 32:
-            break;
-    }
-
-}
-
+//This function propels ball in direction of vector pointing from camera to mouse coordinates.
 function shootBall() {
 
     raycaster.setFromCamera(mouseCoords, camera);
-
-    // Creates a ball and throws it
-
     tmpPos.copy(raycaster.ray.direction);
     tmpPos.add(raycaster.ray.origin);
 
@@ -273,7 +258,8 @@ function shootBall() {
 
 }
 
-function moveCube(cubeIndex){
+//Moves and rotates three.js object together with ammo.js physical properties along vector path, created in createPaths.
+function moveRoom1Cube(cubeIndex){
     let scalingFactor = 0.3;
 
     let moveX =  kMoveDirection.right - kMoveDirection.left;
@@ -283,13 +269,13 @@ function moveCube(cubeIndex){
 
     let translateFactor = tmpPos.set(moveX, moveY, moveZ);
     translateFactor.multiplyScalar(scalingFactor);
-    cube[cubeIndex].translateX(translateFactor.x);
-    cube[cubeIndex].translateY(translateFactor.y);
-    cube[cubeIndex].translateZ(translateFactor.z);
-    cube[cubeIndex].getWorldPosition(tmpPos);
-    cube[cubeIndex].getWorldQuaternion(tmpQuat);
+    room1MovingBox[cubeIndex].translateX(translateFactor.x);
+    room1MovingBox[cubeIndex].translateY(translateFactor.y);
+    room1MovingBox[cubeIndex].translateZ(translateFactor.z);
+    room1MovingBox[cubeIndex].getWorldPosition(tmpPos);
+    room1MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
 
-    let physicsBody = cube[cubeIndex].userData.physicsBody;
+    let physicsBody = room1MovingBox[cubeIndex].userData.physicsBody;
 
     let ms = physicsBody.getMotionState();
 
@@ -302,28 +288,29 @@ function moveCube(cubeIndex){
         ms.setWorldTransform(tmpTrans);
     }
 
-    PosIndex[cubeIndex] = PosIndex[cubeIndex]+guiControls.movementSpeed;
-    if (PosIndex[cubeIndex] > 1000) { PosIndex[cubeIndex] = 0;}
-    var camPos = curve[cubeIndex].getPoint(PosIndex[cubeIndex] / 500);
-    var camRot = curve[cubeIndex].getTangent(PosIndex[cubeIndex] / 500);
-    cube[cubeIndex].translateX(camPos.x);
-    cube[cubeIndex].translateY(camPos.y);
-    cube[cubeIndex].translateZ(camPos.z);
-    cube[cubeIndex].rotateX(camRot);
-    cube[cubeIndex].rotateY(camRot);
-    cube[cubeIndex].rotateZ(camRot);
-    cube[cubeIndex].getWorldPosition(tmpPos);
-    cube[cubeIndex].getWorldQuaternion(tmpQuat);
-    cube[cubeIndex].position.x = camPos.x;
-    cube[cubeIndex].position.y = camPos.y;
-    cube[cubeIndex].position.z = camPos.z;
-    cube[cubeIndex].rotation.x = camRot.x;
-    cube[cubeIndex].rotation.y = camRot.y;
-    cube[cubeIndex].rotation.z = camRot.z;
-    cube[cubeIndex].lookAt(curve[cubeIndex].getPoint((PosIndex[cubeIndex]+1) / 500));
+    PosIndex1[cubeIndex] = PosIndex1[cubeIndex]+guiControls.movementSpeed;
+    if (PosIndex1[cubeIndex] > 1000) { PosIndex1[cubeIndex] = 0;}
+    var camPos = curve[cubeIndex].getPoint(PosIndex1[cubeIndex] / 500);
+    var camRot = curve[cubeIndex].getTangent(PosIndex1[cubeIndex] / 500);
+    room1MovingBox[cubeIndex].translateX(camPos.x);
+    room1MovingBox[cubeIndex].translateY(camPos.y);
+    room1MovingBox[cubeIndex].translateZ(camPos.z);
+    room1MovingBox[cubeIndex].rotateX(camRot);
+    room1MovingBox[cubeIndex].rotateY(camRot);
+    room1MovingBox[cubeIndex].rotateZ(camRot);
+    room1MovingBox[cubeIndex].getWorldPosition(tmpPos);
+    room1MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
+    room1MovingBox[cubeIndex].position.x = camPos.x;
+    room1MovingBox[cubeIndex].position.y = camPos.y;
+    room1MovingBox[cubeIndex].position.z = camPos.z;
+    room1MovingBox[cubeIndex].rotation.x = camRot.x;
+    room1MovingBox[cubeIndex].rotation.y = camRot.y;
+    room1MovingBox[cubeIndex].rotation.z = camRot.z;
+    room1MovingBox[cubeIndex].lookAt(curve[cubeIndex].getPoint((PosIndex1[cubeIndex]+1) / 500));
 }
 
-function rotateWall(cubeIndex){
+//Rotates three.js object together with ammo.js physical properties by vector path tangent, created in createPaths.
+function rotateRoom1Wall(cubeIndex){
     let scalingFactor = 0.3;
 
     let moveX =  kMoveDirection.right - kMoveDirection.left;
@@ -333,14 +320,14 @@ function rotateWall(cubeIndex){
 
     let translateFactor = tmpPos.set(moveX, moveY, moveZ);
     translateFactor.multiplyScalar(scalingFactor);
-    cube[cubeIndex].translateX(translateFactor.x);
-    cube[cubeIndex].translateY(translateFactor.y);
-    cube[cubeIndex].translateZ(translateFactor.z);
-    cube[cubeIndex].getWorldPosition(tmpPos);
-    cube[cubeIndex].getWorldQuaternion(tmpQuat);
+    room1MovingBox[cubeIndex].translateX(translateFactor.x);
+    room1MovingBox[cubeIndex].translateY(translateFactor.y);
+    room1MovingBox[cubeIndex].translateZ(translateFactor.z);
+    room1MovingBox[cubeIndex].getWorldPosition(tmpPos);
+    room1MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
 
 
-    let physicsBody = cube[cubeIndex].userData.physicsBody;
+    let physicsBody = room1MovingBox[cubeIndex].userData.physicsBody;
 
     let ms = physicsBody.getMotionState();
 
@@ -353,20 +340,67 @@ function rotateWall(cubeIndex){
         ms.setWorldTransform(tmpTrans);
     }
 
-    var camRot = curve[1].getTangent(PosIndex[1] / 500);
+    var camRot = curve[1].getTangent(PosIndex1[1] / 500);
 
-    cube[cubeIndex].rotateX(camRot);
-    cube[cubeIndex].rotateY(camRot);
-    cube[cubeIndex].rotateZ(camRot);
-    cube[cubeIndex].getWorldPosition(tmpPos);
-    cube[cubeIndex].getWorldQuaternion(tmpQuat);
+    room1MovingBox[cubeIndex].rotateX(camRot);
+    room1MovingBox[cubeIndex].rotateY(camRot);
+    room1MovingBox[cubeIndex].rotateZ(camRot);
+    room1MovingBox[cubeIndex].getWorldPosition(tmpPos);
+    room1MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
 
-    cube[cubeIndex].rotation.x = camRot.x;
-    cube[cubeIndex].rotation.y = camRot.y;
-    cube[cubeIndex].rotation.z = camRot.z;
-    cube[cubeIndex].lookAt(curve[1].getPoint((PosIndex[1]+1) / 500));
+    room1MovingBox[cubeIndex].rotation.x = camRot.x;
+    room1MovingBox[cubeIndex].rotation.y = camRot.y;
+    room1MovingBox[cubeIndex].rotation.z = camRot.z;
+    room1MovingBox[cubeIndex].lookAt(curve[1].getPoint((PosIndex1[1]+1) / 500));
 }
 
+//Periodic up and down movement of three.js object together with ammo.js physical properties.
+function moveRoom3Cube(cubeIndex){
+
+        let scalingFactor = 0.3;
+
+        let moveX =  kMoveDirection.right - kMoveDirection.left;
+        let moveZ =  kMoveDirection.back - kMoveDirection.forward;
+        let moveY =  0;
+        // console.log("room3box");
+        // console.log(room3MovingBox);
+        // console.log("room1box");
+        // console.log(room1MovingBox);
+        let translateFactor = tmpPos.set(moveX, moveY, moveZ);
+        translateFactor.multiplyScalar(scalingFactor);
+        room3MovingBox[cubeIndex].translateX(translateFactor.x);
+        room3MovingBox[cubeIndex].translateY(translateFactor.y);
+        room3MovingBox[cubeIndex].translateZ(translateFactor.z);
+        room3MovingBox[cubeIndex].getWorldPosition(tmpPos);
+        room3MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
+
+        let physicsBody = room3MovingBox[cubeIndex].userData.physicsBody;
+
+        let ms = physicsBody.getMotionState();
+
+        if ( ms ) {
+            ammoTmpPos.setValue(tmpPos.x, tmpPos.y, tmpPos.z);
+            ammoTmpQuat.setValue(tmpQuat.x, tmpQuat.y, tmpQuat.z, tmpQuat.w);
+            tmpTrans.setIdentity();
+            tmpTrans.setOrigin(ammoTmpPos);
+            tmpTrans.setRotation(ammoTmpQuat);
+            ms.setWorldTransform(tmpTrans);
+        }
+
+        PosIndex3[cubeIndex] = PosIndex3[cubeIndex]+guiControls.movementSpeed*movementDir[cubeIndex];
+        if (PosIndex3[cubeIndex] > 55) { movementDir[cubeIndex] = -1;}
+        if (PosIndex3[cubeIndex] < -95) { movementDir[cubeIndex] = 1;}
+        room3MovingBox[cubeIndex].translateY(PosIndex3[cubeIndex]);
+        room3MovingBox[cubeIndex].getWorldPosition(tmpPos);
+        room3MovingBox[cubeIndex].getWorldQuaternion(tmpQuat);
+        room3MovingBox[cubeIndex].position.y = PosIndex3[cubeIndex];
+
+
+
+
+}
+
+//Creates room floors including ammo.js implementation.
 function createRoomFloor(positionY) {
 
     let posBase = {x: 0, y: positionY, z: 0};
@@ -418,54 +452,7 @@ function createRoomFloor(positionY) {
 
 }
 
-function createPhysicsObj(posX,posY,posZ,degreesX,degreesY,degreesZ,sizeX,sizeY,sizeZ,roomIndex){
-    let posBase = {x: posX, y: posY, z: posZ};
-    let scale = {x: sizeX, y: sizeY, z: sizeZ};
-    let quat = {x: 0, y: 0, z: 0, w: 1};
-    let mass = 1000;
-
-
-        //threeJS Section
-
-    blockPlane = new THREE.Mesh(new THREE.BoxBufferGeometry(),  new THREE.MeshPhongMaterial({color: '#'+(Math.random() * 0xFFFFFF << 0).toString(16).padStart(6, '0')}));
-
-    // blockPlane[i] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xa0afa4}));
-    blockPlane.position.set(posBase.x + room.roomOffsetX[roomIndex], posBase.y, posBase.z);
-    //blockPlane.rotation.set(THREE.Math.degToRad(degreesX), THREE.Math.degToRad(degreesY), THREE.Math.degToRad(degreesZ));
-    blockPlane.rotation.set(THREE.Math.degToRad(degreesX), THREE.Math.degToRad(degreesY), THREE.Math.degToRad(degreesZ));
-    blockPlane.scale.set(scale.x, scale.y, scale.z);
-    blockPlane.castShadow = true;
-    blockPlane.receiveShadow = true;
-
-    scene.add(blockPlane);
-    //Ammojs Section
-
-    let transform = new Ammo.btTransform();
-    transform.setIdentity();
-    transform.setOrigin(new Ammo.btVector3(posBase.x + room.roomOffsetX[roomIndex], posBase.y, posBase.z));
-    transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
-
-    let motionState = new Ammo.btDefaultMotionState(transform);
-    let colShape = new Ammo.btBoxShape(new Ammo.btVector3(scale.x * 0.5, scale.y * 0.5, scale.z * 0.5));
-    colShape.setMargin(0.05);
-
-    let localInertia = new Ammo.btVector3(0, 0, 0);
-    colShape.calculateLocalInertia(mass, localInertia);
-
-    let rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
-    let body = new Ammo.btRigidBody(rbInfo);
-
-    body.setFriction(4);
-    body.setRollingFriction(10);
-    body.setRestitution(1);
-
-    physicsWorld.addRigidBody(body);
-    blockPlane.userData.physicsBody = body;
-
-    return body;
-
-}
-
+//Creates room walls including ammo.js implementation.
 function createRoomWalls()    {
     let posBase;
     let scale;
@@ -537,6 +524,58 @@ function createRoomWalls()    {
 
 }
 
+//Creates three.js box object with ammo.js functions with given parameters.
+function createPhysicsObj(posX,posY,posZ,degreesX,degreesY,degreesZ,sizeX,sizeY,sizeZ,roomIndex){
+    let posBase = {x: posX, y: posY, z: posZ};
+    let scale = {x: sizeX, y: sizeY, z: sizeZ};
+    let quat = {x: 0, y: 0, z: 0, w: 1};
+    let mass = 10;
+
+
+        //threeJS Section
+
+    blockPlane[0] = new THREE.Mesh(new THREE.BoxBufferGeometry(),  new THREE.MeshPhongMaterial({color: '#'+(Math.random() * 0xFFFFFF << 0).toString(16).padStart(6, '0')}));
+
+    // blockPlane[i] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xa0afa4}));
+    blockPlane[0] .position.set(posBase.x + room.roomOffsetX[roomIndex], posBase.y, posBase.z);
+    //blockPlane.rotation.set(THREE.Math.degToRad(degreesX), THREE.Math.degToRad(degreesY), THREE.Math.degToRad(degreesZ));
+    blockPlane[0] .rotation.set(THREE.Math.degToRad(degreesX), THREE.Math.degToRad(degreesY), THREE.Math.degToRad(degreesZ));
+    blockPlane[0] .scale.set(scale.x, scale.y, scale.z);
+    blockPlane[0] .castShadow = true;
+    blockPlane[0] .receiveShadow = true;
+
+    scene.add(blockPlane[0] );
+    //Ammojs Section
+
+    let transform = new Ammo.btTransform();
+    transform.setIdentity();
+    transform.setOrigin(new Ammo.btVector3(posBase.x + room.roomOffsetX[roomIndex], posBase.y, posBase.z));
+    transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+
+    let motionState = new Ammo.btDefaultMotionState(transform);
+    let colShape = new Ammo.btBoxShape(new Ammo.btVector3(scale.x * 0.5, scale.y * 0.5, scale.z * 0.5));
+    colShape.setMargin(0.05);
+
+    let localInertia = new Ammo.btVector3(0, 0, 0);
+    colShape.calculateLocalInertia(mass, localInertia);
+
+    let rbInfo = new Ammo.btRigidBodyConstructionInfo(mass, motionState, colShape, localInertia);
+    let body = new Ammo.btRigidBody(rbInfo);
+
+    body.setFriction(4);
+    body.setRollingFriction(10);
+    body.setRestitution(1);
+    body.setActivationState( STATE.DISABLE_DEACTIVATION );
+    body.setCollisionFlags( FLAGS.CF_KINEMATIC_OBJECT );
+
+    physicsWorld.addRigidBody(body);
+    blockPlane[0] .userData.physicsBody = body;
+
+    return blockPlane[0] ;
+
+}
+
+//Creates three.js ball object with ammo.js functions with given parameters.
 function createBall(posX,posZ)  {
 
     let pos = {x: posX, y: 200, z: posZ};
@@ -583,6 +622,7 @@ function createBall(posX,posZ)  {
     rigidBodies.push(ball);
 }
 
+//Setting up room 1 objects.
 function fillRoom1(){
     createPaths();
     createCubes(0);
@@ -590,6 +630,7 @@ function fillRoom1(){
     createRotatingWall(2);
 }
 
+//Setting up room 2 objects.
 function fillRoom2() {
 
     createPlankBoxWall(200,0,1);
@@ -603,21 +644,25 @@ function fillRoom2() {
 
 }
 
+//Setting up room 3 objects.
 function fillRoom3(){
-    createPhysicsObj(0,50,0,0,0,0,100,100,100,2);
-    createPhysicsObj(-330,70,0,0,0,0,10,190,250,2);
-    createPhysicsObj(330,70,0,0,0,0,10,190,250,2);
-    createPhysicsObj(0,50,330,0,0,0,250,190,10,2);
-    createPhysicsObj(0,50,-330,0,0,0,250,190,10,2);
-    createPhysicsObj(300,200,300,0,0,0,50,50,50,2);
-    createPhysicsObj(300,200,-300,0,0,0,50,50,50,2);
-    createPhysicsObj(-300,200,300,0,0,0,50,50,50,2);
-    createPhysicsObj(-300,200,-300,0,0,0,50,50,50,2);
+    staticObject[0] = createPhysicsObj(0,50,0,0,0,0,100,100,100,2);
+    staticObject[1] = createPhysicsObj(-330,70,0,0,0,0,10,190,250,2);
+    staticObject[2] = createPhysicsObj(330,70,0,0,0,0,10,190,250,2);
+    staticObject[3] = createPhysicsObj(0,50,330,0,0,0,250,190,10,2);
+    staticObject[4] = createPhysicsObj(0,50,-330,0,0,0,250,190,10,2);
+    staticObject[5] = createPhysicsObj(300,200,300,0,0,0,50,50,50,2);
+    staticObject[6] = createPhysicsObj(300,200,-300,0,0,0,50,50,50,2);
+    staticObject[7] = createPhysicsObj(-300,200,300,0,0,0,50,50,50,2);
+    staticObject[8] = createPhysicsObj(-300,200,-300,0,0,0,50,50,50,2);
 
-
-
-
+    room3MovingBox[0] = createPhysicsObj(180,10,180,0,0,0,200,200,200,2);
+    room3MovingBox[1] = createPhysicsObj(180,10,-180,0,0,0,200,200,200,2);
+    room3MovingBox[3] = createPhysicsObj(-180,10,180,0,0,0,200,200,200,2);
+    room3MovingBox[2] = createPhysicsObj(-180,10,-180,0,0,0,200,200,200,2);
 }
+
+//Creates vectors used for movement of objects in room 1.
 function createPaths(){
     curve[0] = new THREE.CatmullRomCurve3( [
         new THREE.Vector3( room.roomOffsetX[0]-250,40,250 ),
@@ -649,6 +694,7 @@ function createPaths(){
 
 }
 
+//Creates three.js box with ammo.js functions used in room 1.
 function createCubes(cubeIndex){
     let pos = {x: room.roomOffsetX[0], y: 40, z: 0};
     let scale = {x: 100, y: 100, z: 100};
@@ -658,17 +704,17 @@ function createCubes(cubeIndex){
     //threeJS Section
     var cubeTexture = new THREE.ImageUtils.loadTexture(
         'texture/metal.jpg' );
-    cube[cubeIndex] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshStandardMaterial( {
+    room1MovingBox[cubeIndex] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshStandardMaterial( {
         map: cubeTexture,
         side: THREE.DoubleSide,
         roughness : 1} ));
-    cube[cubeIndex].position.set(pos.x, pos.y, pos.z);
-    cube[cubeIndex].scale.set(scale.x, scale.y, scale.z);
+    room1MovingBox[cubeIndex].position.set(pos.x, pos.y, pos.z);
+    room1MovingBox[cubeIndex].scale.set(scale.x, scale.y, scale.z);
 
-    cube[cubeIndex].castShadow = true;
-    cube[cubeIndex].receiveShadow = true;
+    room1MovingBox[cubeIndex].castShadow = true;
+    room1MovingBox[cubeIndex].receiveShadow = true;
 
-    scene.add(cube[cubeIndex]);
+    scene.add(room1MovingBox[cubeIndex]);
 
 
     //Ammojs Section
@@ -695,11 +741,12 @@ function createCubes(cubeIndex){
 
 
     physicsWorld.addRigidBody( body );
-    cube[cubeIndex].userData.physicsBody = body;
+    room1MovingBox[cubeIndex].userData.physicsBody = body;
 
 
 }
 
+//Creates three.js box with ammo.js functions used in room 1.
 function createRotatingWall(cubeIndex){
     let pos = {x: room.roomOffsetX[0], y: 40, z: 0};
     let scale = {x: 400, y: 100, z: 10};
@@ -709,17 +756,17 @@ function createRotatingWall(cubeIndex){
     //threeJS Section
     var cubeTexture = new THREE.ImageUtils.loadTexture(
         'texture/tiles2.png' );
-    cube[cubeIndex] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshStandardMaterial( {
+    room1MovingBox[cubeIndex] = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshStandardMaterial( {
         map: cubeTexture,
         side: THREE.DoubleSide,
         roughness : 1} ));
-    cube[cubeIndex].position.set(pos.x, pos.y, pos.z);
-    cube[cubeIndex].scale.set(scale.x, scale.y, scale.z);
+    room1MovingBox[cubeIndex].position.set(pos.x, pos.y, pos.z);
+    room1MovingBox[cubeIndex].scale.set(scale.x, scale.y, scale.z);
 
-    cube[cubeIndex].castShadow = true;
-    cube[cubeIndex].receiveShadow = true;
+    room1MovingBox[cubeIndex].castShadow = true;
+    room1MovingBox[cubeIndex].receiveShadow = true;
 
-    scene.add(cube[cubeIndex]);
+    scene.add(room1MovingBox[cubeIndex]);
 
 
     //Ammojs Section
@@ -746,9 +793,10 @@ function createRotatingWall(cubeIndex){
 
 
     physicsWorld.addRigidBody( body );
-    cube[cubeIndex].userData.physicsBody = body;
+    room1MovingBox[cubeIndex].userData.physicsBody = body;
 }
 
+//Creates three.js stacked box walls with ammo.js functions used in room 2.
 function createPlankBoxWall(xOffset, zOffset, rotation){
     let pos = {x: xOffset + room.boxWallOffsetX, y: 0, z: zOffset };
     let scale = {x: 20, y: 20, z: 20};
@@ -814,24 +862,7 @@ function createPlankBoxWall(xOffset, zOffset, rotation){
 
 }
 
-function moveBall() {
-
-    let scalingFactor = 20;
-
-    let moveX = moveDirection.right - moveDirection.left;
-    let moveZ = moveDirection.back - moveDirection.forward;
-    let moveY = 0;
-
-    if (moveX == 0 && moveY == 0 && moveZ == 0) return;
-
-    let resultantImpulse = new Ammo.btVector3(moveX, moveY, moveZ)
-    resultantImpulse.op_mul(scalingFactor);
-
-    let physicsBody = ballObject.userData.physicsBody;
-    physicsBody.setLinearVelocity(resultantImpulse);
-
-}
-
+//Updates ammo.js objects.
 function updateScene(deltaTime) {
     controls.update();
     // Step world
@@ -856,10 +887,13 @@ function updateScene(deltaTime) {
 
 }
 
+//Function for rendering gui.
 function setupGui(){
     const gui = new GUI()
 
     const roomFolder = gui.addFolder('Room Selection')
+    roomFolder.add(guiControls,'resetGame')
+        .name('New Game');
     level = roomFolder.add(guiControls,'toggle',
         ['Room 1', 'Room 2', 'Room 3'])
         .name('Select room')
@@ -881,23 +915,25 @@ function setupGui(){
         function(newValue) {
             switch (newValue){
                 case 'Room 1':
-                    console.log('Room 1');
+                    camera.position.set(room.roomOffsetX[0], 100, 380);
+                    controls.target = new THREE.Vector3(room.roomOffsetX[0], 40, 0);
 
-                    camera.position.set(room.roomOffsetX[0], 30, 70);
-                    controls.target = new THREE.Vector3(room.roomOffsetX[0], 0, 0)
+                    room1Filled = true;
+
 
                     break
                 case 'Room 2':
-                    console.log('Room 2');
-                    camera.position.set(room.roomOffsetX[1], 30, 70);
-                    controls.target = new THREE.Vector3(room.roomOffsetX[1], 0, 0)
+                    camera.position.set(room.roomOffsetX[1], 70, 90);
+                    controls.target = new THREE.Vector3(room.roomOffsetX[1], 40, 0);
+                    fillRoom2();
+                    room2Filled = true;
 
                     break
                 case 'Room 3':
-                    console.log('Room 3');
-                    camera.position.set(room.roomOffsetX[2], 30, 70);
-                    controls.target = new THREE.Vector3(room.roomOffsetX[2], 0, 0)
-
+                    camera.position.set(room.roomOffsetX[2]+380, 360, 380);
+                    controls.target = new THREE.Vector3(room.roomOffsetX[2], 40, 0);
+                    fillRoom3();
+                    room3Filled = true;
                     break
             }
 
